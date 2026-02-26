@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Three.js CRISPR Starter</title>
+  <style>
+    body { margin:0; overflow:hidden; font-family:Arial; }
+    #ui { position: absolute; left:12px; top:12px; width:220px; background:rgba(255,255,255,0.9); padding:8px; border-radius:6px; }
+    #enzyme { width:90px; height:40px; background:#9b59b6; color:#fff; display:flex; align-items:center; justify-content:center; border-radius:6px; cursor:grab; user-select:none; }
+    button { margin-top:6px; width:100%; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div id="enzyme">Cas9</div>
+    <button id="simCut">Simulate Cut (Space)</button>
+    <div id="info">Hover a base pair and drag enzyme to it.</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.module.js';
+    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/controls/OrbitControls.js';
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 5000);
+    camera.position.set(0, 0, 600);
+
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+    dir.position.set(100,200,100);
+    scene.add(dir);
+
+    // DNA data
+    const pairCount = 120;
+    const helixRadius = 80;
+    const pitch = 6;
+    const step = 0.45; // angle step
+    const dna = []; // {index,a,b,meshLeft,meshRight,px,py,pz}
+
+    // color map
+    const cmap = { A:0xe74c3c, T:0x2ecc71, C:0x3498db, G:0xf1c40f, '-':0x999999 };
+    const bases = ['A','T','C','G'];
+
+    // simple sphere geometry and materials cache
+    const sphereGeo = new THREE.SphereGeometry(8, 12, 12);
+
+    function complement(b){ return b==='A'?'T':b==='T'?'A':b==='C'?'G':'C'; }
+
+    for(let i=0;i<pairCount;i++){
+      const a = bases[Math.floor(Math.random()*4)];
+      const b = complement(a);
+      const theta = i * step;
+      const x = Math.cos(theta) * helixRadius;
+      const z = Math.sin(theta) * helixRadius;
+      const y = (i - pairCount/2) * pitch;
+
+      const matA = new THREE.MeshStandardMaterial({color:cmap[a]});
+      const matB = new THREE.MeshStandardMaterial({color:cmap[b]});
+      const meshA = new THREE.Mesh(sphereGeo, matA);
+      const meshB = new THREE.Mesh(sphereGeo, matB);
+      meshA.position.set(x - 12, y, z);
+      meshB.position.set(x + 12, y, z);
+      scene.add(meshA, meshB);
+
+      // small connector
+      const connGeo = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(x-12,y,z), new THREE.Vector3(x+12,y,z) ]);
+      const conn = new THREE.Line(connGeo, new THREE.LineBasicMaterial({color:0xcccccc}));
+      scene.add(conn);
+
+      dna.push({index:i, a, b, meshA, meshB, conn, pos:new THREE.Vector3(x,y,z)});
+    }
+
+    // enzyme overlay element drag
+    const enzymeEl = document.getElementById('enzyme');
+    let dragging = false;
+    let enzymeScreen = {x:60, y:60, attachedIndex:-1};
+    enzymeEl.style.position = 'absolute';
+    enzymeEl.style.left = enzymeScreen.x + 'px';
+    enzymeEl.style.top = enzymeScreen.y + 'px';
+
+    enzymeEl.addEventListener('pointerdown', (e)=>{
+      dragging = true;
+      enzymeEl.setPointerCapture(e.pointerId);
+      enzymeEl.style.cursor = 'grabbing';
+    });
+    window.addEventListener('pointermove', (e)=>{
+      if(!dragging) return;
+      enzymeScreen.x = e.clientX - 45;
+      enzymeScreen.y = e.clientY - 20;
+      enzymeEl.style.left = enzymeScreen.x + 'px';
+      enzymeEl.style.top = enzymeScreen.y + 'px';
+    });
+    window.addEventListener('pointerup', (e)=>{
+      if(!dragging) return;
+      dragging = false;
+      enzymeEl.style.cursor = 'grab';
+      // on drop, raycast into scene to find nearest base
+      const mouse = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(mouse, camera);
+      // check all nucleotide meshes
+      const intersects = ray.intersectObjects(dna.flatMap(d=>[d.meshA,d.meshB]));
+      if(intersects.length>0){
+        const hit = intersects[0].object;
+        // find dna index
+        const idx = dna.findIndex(d => d.meshA===hit || d.meshB===hit);
+        if(idx>=0){
+          enzymeScreen.attachedIndex = idx;
+          // snap enzyme to screen position of that base
+          const screenPos = worldToScreen(dna[idx].pos);
+          enzymeScreen.x = screenPos.x - 45;
+          enzymeScreen.y = screenPos.y - 20;
+          enzymeEl.style.left = enzymeScreen.x + 'px';
+          enzymeEl.style.top = enzymeScreen.y + 'px';
+          document.getElementById('info').innerText = 'Enzyme snapped to index ' + idx;
+          return;
+        }
+      }
+      // else return to sidebar
+      enzymeScreen.attachedIndex = -1;
+      enzymeScreen.x = 60; enzymeScreen.y = 60;
+      enzymeEl.style.left = enzymeScreen.x + 'px';
+      enzymeEl.style.top = enzymeScreen.y + 'px';
+      document.getElementById('info').innerText = 'Dropped off DNA';
+    });
+
+    function worldToScreen(vec){
+      const v = vec.clone();
+      v.project(camera);
+      return { x: (v.x + 1) * innerWidth / 2, y: (-v.y + 1) * innerHeight / 2 };
+    }
+
+    // raycaster for hover highlight
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let hoverIndex = -1;
+    window.addEventListener('mousemove', (e)=>{
+      mouse.x = (e.clientX / innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(dna.flatMap(d=>[d.meshA,d.meshB]));
+      if(intersects.length>0){
+        const hit = intersects[0].object;
+        const idx = dna.findIndex(d => d.meshA===hit || d.meshB===hit);
+        if(idx !== hoverIndex){
+          if(hoverIndex>=0) { dna[hoverIndex].meshA.material.emissive.setHex(0x000000); dna[hoverIndex].meshB.material.emissive.setHex(0x000000); }
+          hoverIndex = idx;
+          dna[hoverIndex].meshA.material.emissive.setHex(0x333333);
+          dna[hoverIndex].meshB.material.emissive.setHex(0x333333);
+        }
+      } else {
+        if(hoverIndex>=0){ dna[hoverIndex].meshA.material.emissive.setHex(0x000000); dna[hoverIndex].meshB.material.emissive.setHex(0x000000); }
+        hoverIndex = -1;
+      }
+    });
+
+    // simulate cut
+    function cutAt(index){
+      if(index<0) return;
+      dna[index].meshA.material.color.setHex(cmap['-']);
+      dna[index].meshB.material.color.setHex(cmap['-']);
+      dna[index].a = '-'; dna[index].b = '-';
+      dna[index].conn.material.color = new THREE.LineBasicMaterial({color:0x333333});
+      document.getElementById('info').innerText = 'Cut at index ' + index;
+    }
+
+    document.getElementById('simCut').addEventListener('click', ()=>{
+      if(enzymeScreen.attachedIndex>=0) cutAt(enzymeScreen.attachedIndex);
+      else alert('Drag enzyme to a base pair first');
+    });
+
+    window.addEventListener('keydown', (e)=>{ if(e.code==='Space'){ if(enzymeScreen.attachedIndex>=0) cutAt(enzymeScreen.attachedIndex); } });
+
+    // animate
+    function animate(){
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // handle resize
+    window.addEventListener('resize', ()=>{
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
