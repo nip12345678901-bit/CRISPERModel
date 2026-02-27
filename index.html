@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CRISPR 3D — Single File (Cas9 only)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body{height:100%;margin:0;background:#eef2f7;font-family:Inter,Arial,Helvetica,sans-serif}
+    #topbar{position:absolute;left:0;right:0;top:0;height:56px;background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 14px;z-index:60}
+    #panel{position:absolute;left:12px;top:72px;width:260px;background:#fff;padding:12px;border-radius:10px;z-index:60;box-shadow:0 8px 30px rgba(10,20,40,0.08)}
+    #controls{position:absolute;left:12px;bottom:12px;width:420px;background:#fff;padding:10px;border-radius:10px;z-index:60;box-shadow:0 8px 30px rgba(10,20,40,0.08)}
+    #enzyme{width:100%;height:44px;background:linear-gradient(180deg,#7b61b6,#5b3f9e);color:#fff;display:flex;align-items:center;justify-content:center;border-radius:8px;cursor:grab;user-select:none;margin-top:8px;box-shadow:0 6px 18px rgba(91,63,158,0.18)}
+    #enzyme.snapped{position:absolute;pointer-events:auto;z-index:99999}
+    .btn{margin-top:8px;padding:8px;border-radius:8px;border:0;cursor:pointer;font-weight:700}
+    .btn.red{background:#ef4444;color:#fff}
+    .btn.gray{background:#6b7280;color:#fff}
+    .btn.orange{background:#f59e0b;color:#fff}
+    .btn.green{background:#10b981;color:#fff}
+    canvas{display:block;position:fixed;left:0;top:0;z-index:1}
+    #eduOverlay{
+      position:fixed;
+      right:20px;
+      bottom:20px;
+      width:340px;
+      background:linear-gradient(180deg,#ffffff,#f8fafc);
+      border-radius:12px;
+      box-shadow:0 12px 40px rgba(10,20,40,0.12);
+      padding:14px;
+      z-index:99999;
+      display:none;
+      font-size:13px;
+      color:#0f172a;
+      border:1px solid rgba(15,23,42,0.06);
+    }
+    #eduOverlay #eduTitle{font-weight:800;margin-bottom:6px}
+    #eduOverlay #eduText{line-height:1.35;margin-bottom:10px}
+    #eduOverlay #eduClose{background:#0f172a;color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer}
+    #mutList{max-height:120px;overflow:auto;margin-top:8px;padding-left:14px}
+    #lastRepair{font-size:13px;margin-top:8px;color:#0f172a}
+    @media (max-width:900px){ #panel{width:200px} #controls{width:320px} #eduOverlay{width:90%;left:5%;right:5%} }
+  </style>
+
+  <!-- UMD Three.js and OrbitControls -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <!-- HTML UI -->
+  <div id="topbar">
+    <div class="left">CRISPR 3D — Demo</div>
+    <div class="right">Orbit: left-drag • Zoom: wheel • Pan: right-drag • Drag enzyme: hold & drag</div>
+  </div>
+
+  <div id="panel">
+    <div style="font-weight:700;margin-bottom:6px">Enzyme</div>
+
+    <!-- Cas9 only: static label (no selector) -->
+    <div id="enzyme" aria-live="polite">Cas9</div>
+
+    <div style="margin-top:8px">
+      <label style="font-size:13px">Guide (20 nt)</label>
+      <input id="guideInput" type="text" maxlength="20" placeholder="ATCG..." style="width:100%;margin-top:6px">
+      <div style="margin-top:6px;display:flex;gap:6px">
+        <button id="loadGuide" class="btn gray">Load Guide</button>
+        <button id="findPAM" class="btn orange">Find PAMs</button>
+      </div>
+    </div>
+
+    <div style="margin-top:10px">
+      <button id="simCut" class="btn red">Simulate Cut (Space)</button>
+      <button id="resetBtn" class="btn gray">Reset DNA</button>
+    </div>
+
+    <div style="margin-top:10px;font-size:13px">
+      <strong>PAM legend</strong>
+      <div style="margin-top:6px">NGG <span style="color:#ff6b6b">●</span> ; NAG <span style="color:#f39c12">●</span></div>
+    </div>
+
+    <div id="lastRepair">Last repair: —</div>
+    <div style="margin-top:10px">
+      <strong>Mutations</strong>
+      <ul id="mutList"></ul>
+    </div>
+  </div>
+
+  <div id="controls">
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="btnNHEJ" class="btn orange">Simulate NHEJ</button>
+      <button id="btnHDR" class="btn green">Simulate HDR</button>
+      <button id="btnPause" class="btn gray">Pause</button>
+    </div>
+    <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+      <label style="font-size:13px">Speed</label>
+      <input id="speed" type="range" min="0" max="2" step="0.05" value="1" style="flex:1">
+    </div>
+    <div style="margin-top:8px;font-size:13px">
+      <strong>Guide:</strong> <span id="guide2d" style="font-family:monospace;background:#f3f4f6;padding:4px;border-radius:4px;cursor:pointer">—</span>
+    </div>
+  </div>
+
+  <!-- Educational overlay -->
+  <div id="eduOverlay" aria-live="polite" style="display:none">
+    <div id="eduTitle"></div>
+    <div id="eduText"></div>
+    <button id="eduClose" aria-label="Close explanation">Got it</button>
+  </div>
+
+  <!-- Combined JS (app) -->
+  <script>
+  (function(){
+    'use strict';
+    if (typeof THREE === 'undefined') { console.error('THREE missing'); document.body.innerHTML = '<div style="padding:20px;font-family:Arial">Three.js failed to load.</div>'; return; }
+
+    // Scene + renderer
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf6f7fb);
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 5000);
+    camera.position.set(0, 120, 700);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Controls
+    const ControlsClass = (typeof THREE !== 'undefined' && THREE.OrbitControls) || window.OrbitControls || null;
+    const controls = ControlsClass ? new ControlsClass(camera, renderer.domElement) : { update: ()=>{} };
+    if (controls && controls.enableDamping !== undefined) { controls.enableDamping = true; controls.dampingFactor = 0.08; controls.minDistance = 50; controls.maxDistance = 3000; }
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(200,400,200); scene.add(dir);
+
+    // dnaGroup
+    const dnaGroup = new THREE.Group();
+    scene.add(dnaGroup);
+
+    // Parameters
+    let pairCount = 40;
+    const helixRadius = 120, pitch = 6, angleStep = 0.45;
+    const dna = [];
+    const colors = { A:0xe74c3c, T:0x2ecc71, C:0x3498db, G:0xf1c40f, '-':0x999999 };
+    const sphereGeo = new THREE.SphereGeometry(8,12,12);
+
+    function complement(b){ if(b==='A')return'T'; if(b==='T')return'A'; if(b==='C')return'G'; if(b==='G')return'C'; return'N'; }
+    function randomGuide(len){ const b=['A','T','C','G']; let s=''; for(let i=0;i<len;i++) s+=b[Math.floor(Math.random()*4)]; return s; }
+
+    // UI refs
+    const guide2dEl = document.getElementById('guide2d');
+    const lastRepairEl = document.getElementById('lastRepair');
+    const mutListEl = document.getElementById('mutList');
+    const guideInput = document.getElementById('guideInput');
+    const loadGuideBtn = document.getElementById('loadGuide');
+    const findPAMBtn = document.getElementById('findPAM');
+
+    // Educational overlay
+    const eduOverlay = document.getElementById('eduOverlay');
+    const eduTitle = document.getElementById('eduTitle');
+    const eduText = document.getElementById('eduText');
+    const eduClose = document.getElementById('eduClose');
+    let eduTimer = null;
+    function explain(title, text, timeout = 6000){
+      try {
+        if (!eduOverlay) return;
+        eduTitle.innerText = title || 'Explanation';
+        eduText.innerText = text || '';
+        eduOverlay.style.display = 'block';
+        if (eduTimer) clearTimeout(eduTimer);
+        eduTimer = setTimeout(()=>{ eduOverlay.style.display = 'none'; eduTimer = null; }, timeout);
+      } catch (e) { console.warn('explain failed', e); }
+    }
+    if (eduClose) eduClose.addEventListener('click', function(){ eduOverlay.style.display = 'none'; if (eduTimer) { clearTimeout(eduTimer); eduTimer = null; } });
+
+    function log(msg){ if (!lastRepairEl) return; lastRepairEl.innerText = msg; }
+
+    // Build DNA
+    function generateDNA(){
+      for (let i=0;i<dna.length;i++){
+        const d = dna[i];
+        if (d.meshA) { dnaGroup.remove(d.meshA); try{ d.meshA.geometry.dispose(); d.meshA.material.dispose(); }catch(e){} }
+        if (d.meshB) { dnaGroup.remove(d.meshB); try{ d.meshB.geometry.dispose(); d.meshB.material.dispose(); }catch(e){} }
+        if (d.conn) { dnaGroup.remove(d.conn); try{ d.conn.geometry.dispose(); d.conn.material.dispose(); }catch(e){} }
+        if (d.pamRing) { dnaGroup.remove(d.pamRing); try{ d.pamRing.geometry.dispose(); d.pamRing.material.dispose(); }catch(e){} }
+        if (d.guideRing) { dnaGroup.remove(d.guideRing); try{ d.guideRing.geometry.dispose(); d.guideRing.material.dispose(); }catch(e){} }
+      }
+      dna.length = 0;
+      if (mutListEl) mutListEl.innerHTML = '';
+
+      for (let i=0;i<pairCount;i++){
+        const a = ['A','T','C','G'][Math.floor(Math.random()*4)];
+        const b = complement(a);
+        const theta = i * angleStep;
+        const x = Math.cos(theta) * helixRadius;
+        const z = Math.sin(theta) * helixRadius;
+        const y = (i - pairCount/2) * pitch;
+
+        const matA = new THREE.MeshStandardMaterial({ color: colors[a] });
+        const matB = new THREE.MeshStandardMaterial({ color: colors[b] });
+        const meshA = new THREE.Mesh(sphereGeo, matA);
+        const meshB = new THREE.Mesh(sphereGeo, matB);
+        meshA.position.set(x-12,y,z); meshB.position.set(x+12,y,z);
+        dnaGroup.add(meshA); dnaGroup.add(meshB);
+
+        const connGeo = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(x-12,y,z), new THREE.Vector3(x+12,y,z) ]);
+        const conn = new THREE.Line(connGeo, new THREE.LineBasicMaterial({ color: 0xcccccc }));
+        dnaGroup.add(conn);
+
+        dna.push({ index:i, a, b, meshA, meshB, conn, pos:new THREE.Vector3(x,y,z), pam:false, pamRing:null, guideRing:null });
+      }
+
+      for (let i=0;i<dna.length-2;i++){
+        const tri = dna[i].a + dna[i+1].a + dna[i+2].a;
+        if (/.[G][G]/.test(tri)){
+          dna[i+1].pam = 'NGG';
+          const ringGeo = new THREE.RingGeometry(18,22,32);
+          const ringMat = new THREE.MeshBasicMaterial({ color:0xff6b6b, side:THREE.DoubleSide, transparent:true, opacity:0.9 });
+          const ring = new THREE.Mesh(ringGeo, ringMat);
+          ring.position.copy(dna[i+1].pos); ring.rotation.x = Math.PI/2;
+          dnaGroup.add(ring); dna[i+1].pamRing = ring;
+        } else if (/.[A][G]/.test(tri)){
+          dna[i+1].pam = 'NAG';
+          const ringGeo = new THREE.RingGeometry(18,22,32);
+          const ringMat = new THREE.MeshBasicMaterial({ color:0xf39c12, side:THREE.DoubleSide, transparent:true, opacity:0.9 });
+          const ring = new THREE.Mesh(ringGeo, ringMat);
+          ring.position.copy(dna[i+1].pos); ring.rotation.x = Math.PI/2;
+          dnaGroup.add(ring); dna[i+1].pamRing = ring;
+        }
+      }
+      log('DNA generated with ' + pairCount + ' base pairs');
+      explain('DNA generated', 'A simple double helix was created. PAM sites (NGG/NAG) are highlighted.');
+    }
+
+    generateDNA();
+
+    // Raycaster & hover
+    const raycaster = new THREE.Raycaster(); const mouse = new THREE.Vector2(); let hoverIndex = -1;
+    function updateMouse(e){ mouse.x = (e.clientX/window.innerWidth)*2-1; mouse.y = -(e.clientY/window.innerHeight)*2+1; raycaster.setFromCamera(mouse,camera); }
+
+    window.addEventListener('pointermove', function(e){
+      updateMouse(e);
+      const objects = [];
+      for (let i=0;i<dna.length;i++) objects.push(dna[i].meshA, dna[i].meshB);
+      const intersects = raycaster.intersectObjects(objects, false);
+      if (intersects.length > 0){
+        const hit = intersects[0].object;
+        let idx = -1;
+        for (let i=0;i<dna.length;i++){ if (dna[i].meshA===hit||dna[i].meshB===hit){ idx=i; break; } }
+        if (idx !== hoverIndex){
+          if (hoverIndex >= 0){ dna[hoverIndex].meshA.material.emissive.setHex(0x000000); dna[hoverIndex].meshB.material.emissive.setHex(0x000000); }
+          hoverIndex = idx;
+          dna[hoverIndex].meshA.material.emissive.setHex(0x333333); dna[hoverIndex].meshB.material.emissive.setHex(0x333333);
+        }
+      } else {
+        if (hoverIndex >= 0){ dna[hoverIndex].meshA.material.emissive.setHex(0x000000); dna[hoverIndex].meshB.material.emissive.setHex(0x000000); }
+        hoverIndex = -1;
+      }
+    });
+
+    // Enzyme visuals (Cas9 only)
+    let enzymeEl = document.getElementById('enzyme');
+    if (!enzymeEl){
+      enzymeEl = document.createElement('div');
+      enzymeEl.id = 'enzyme';
+      enzymeEl.innerText = 'Cas9';
+      document.getElementById('panel') && document.getElementById('panel').appendChild(enzymeEl);
+    }
+    enzymeEl.style.userSelect = 'none';
+    enzymeEl.style.cursor = 'grab';
+
+    const enzymeGroup = new THREE.Group();
+    scene.add(enzymeGroup);
+    const enzymeBody = new THREE.Mesh(new THREE.SphereGeometry(14,16,16), new THREE.MeshStandardMaterial({ color: 0x6b5b95 }));
+    enzymeGroup.add(enzymeBody);
+
+    // guide ribbon
+    let guideTube = null;
+    function createGuideRibbon(seq){
+      try {
+        if (guideTube){ enzymeGroup.remove(guideTube); guideTube.geometry.dispose && guideTube.geometry.dispose(); guideTube.material.dispose && guideTube.material.dispose(); guideTube = null; }
+        const points = [];
+        for (let i=0;i<20;i++){
+          const t = i/19;
+          points.push(new THREE.Vector3(-40 + t*80, Math.sin(t*Math.PI*2)*6, Math.cos(t*Math.PI*2)*6));
+        }
+        const curve = new THREE.CatmullRomCurve3(points);
+        const geo = new THREE.TubeGeometry(curve, 64, 2.2, 8, false);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x2ecc71, transparent:true, opacity:0.95 });
+        guideTube = new THREE.Mesh(geo, mat);
+        enzymeGroup.add(guideTube);
+      } catch (e) { console.warn('createGuideRibbon failed', e); }
+    }
+    let guideSeq = randomGuide(20);
+    createGuideRibbon(guideSeq);
+    if (guide2dEl) guide2dEl.innerText = guideSeq;
+    if (guideInput) guideInput.value = guideSeq;
+
+    // Enzyme drag & snap
+    let draggingUI=false, attachedIndex=-1;
+    enzymeEl.addEventListener('pointerdown', function(ev){
+      draggingUI = true;
+      enzymeEl.setPointerCapture && enzymeEl.setPointerCapture(ev.pointerId);
+      enzymeEl.style.cursor = 'grabbing';
+      enzymeEl.classList.remove('snapped');
+      explain('Drag enzyme', 'You started dragging the enzyme. Drop it onto a base pair to snap the enzyme there.');
+    });
+    window.addEventListener('pointermove', function(ev){
+      if (!draggingUI) return;
+      enzymeEl.style.position = 'absolute';
+      enzymeEl.style.left = (ev.clientX - 45) + 'px';
+      enzymeEl.style.top = (ev.clientY - 20) + 'px';
+      enzymeEl.style.zIndex = '99999';
+    });
+    window.addEventListener('pointerup', function(ev){
+      if (!draggingUI) return;
+      draggingUI = false;
+      enzymeEl.style.cursor = 'grab';
+      const mx = (ev.clientX/window.innerWidth)*2-1;
+      const my = -(ev.clientY/window.innerHeight)*2+1;
+      raycaster.setFromCamera({x:mx,y:my}, camera);
+      const objects = [];
+      for (let i=0;i<dna.length;i++) objects.push(dna[i].meshA, dna[i].meshB);
+      const intersects = raycaster.intersectObjects(objects, false);
+      if (intersects.length > 0){
+        const hit = intersects[0].object;
+        let idx = -1;
+        for (let i=0;i<dna.length;i++){ if (dna[i].meshA===hit||dna[i].meshB===hit){ idx=i; break; } }
+        if (idx >= 0){
+          attachedIndex = idx;
+          const p = dna[idx].pos.clone();
+          enzymeGroup.position.copy(p);
+          enzymeEl.classList.add('snapped');
+          enzymeEl.style.position = 'absolute';
+          const screen = worldToScreen(p);
+          enzymeEl.style.left = (screen.x - 45) + 'px';
+          enzymeEl.style.top = (screen.y - 20) + 'px';
+          enzymeEl.style.zIndex = '99999';
+          log('Enzyme snapped to index ' + idx + (dna[idx].pam ? ' ('+dna[idx].pam+')' : ''));
+          explain('Enzyme bound', 'The enzyme has bound to the DNA at this base pair.');
+          return;
+        }
+      }
+      attachedIndex = -1;
+      enzymeEl.classList.remove('snapped');
+      enzymeEl.style.position = 'relative';
+      enzymeEl.style.left = '';
+      enzymeEl.style.top = '';
+      enzymeEl.style.zIndex = '';
+      log('Enzyme returned to sidebar');
+      explain('Enzyme returned', 'The enzyme was not placed on a base pair and returned to the sidebar.');
+    });
+
+    function worldToScreen(vec){
+      const v = vec.clone();
+      v.project(camera);
+      return { x:(v.x+1)*window.innerWidth/2, y:(-v.y+1)*window.innerHeight/2 };
+    }
+
+    // Cut & repair logic
+    const cutSites = [];
+    function performCut(idx, offTarget=false){
+      if (idx < 0) return;
+      if (cutSites.indexOf(idx) === -1) cutSites.push(idx);
+      dna[idx].meshA.material.color.setHex(colors['-']); dna[idx].meshB.material.color.setHex(colors['-']);
+      dna[idx].a='-'; dna[idx].b='-';
+      const p = dna[idx].pos;
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(p.x,p.y-30,p.z), new THREE.Vector3(p.x,p.y+30,p.z) ]);
+      const marker = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color:0x2c3e50 }));
+      dnaGroup.add(marker);
+      const entry = { type: 'cut', index: idx, offTarget: !!offTarget, time: Date.now() };
+      addMutationEntry(entry);
+      if (lastRepairEl) lastRepairEl.innerText = offTarget ? 'Last repair: Off-target cut' : 'Last repair: Cut performed';
+      enzymeEl.classList.remove('snapped'); enzymeEl.style.position='relative'; attachedIndex=-1;
+      log('Cut at index ' + idx + (offTarget ? ' (off-target)' : ''));
+      explain('Cut performed', 'A double-strand break was simulated at this base pair.');
+    }
+
+    function addMutationEntry(entry){
+      if (!mutListEl) return;
+      const li = document.createElement('li');
+      li.textContent = `${entry.type} @ ${entry.index} ${entry.offTarget ? '(off-target)' : ''} ${new Date(entry.time).toLocaleTimeString()}`;
+      mutListEl.prepend(li);
+    }
+
+    // UI handlers
+    const simCutBtn = document.getElementById('simCut');
+    if (simCutBtn) simCutBtn.addEventListener('click', function(){ if (attachedIndex>=0) performCut(attachedIndex, !dna[attachedIndex].pam); else { alert('Drag enzyme to a base pair first.'); explain('No enzyme bound', 'Place the enzyme on a base pair before cutting.'); } });
+    window.addEventListener('keydown', function(e){ if (e.code === 'Space'){ e.preventDefault(); if (attachedIndex>=0) performCut(attachedIndex, !dna[attachedIndex].pam); else { alert('Drag enzyme to a base pair first.'); explain('No enzyme bound', 'Place the enzyme on a base pair before cutting.'); } } });
+
+    function simulateNHEJ(){
+      if (cutSites.length === 0){ alert('No cut to repair. Create a cut first.'); explain('No cut', 'NHEJ repairs double-strand breaks without a template and often introduces small insertions or deletions (indels).'); return; }
+      const idx = cutSites[cutSites.length-1];
+      const del = Math.floor(Math.random()*3); const ins = Math.floor(Math.random()*3);
+      for (let i=0;i<del;i++){ const pos = Math.min(dna.length-1, idx + i); dna[pos].meshA.material.color.setHex(colors['-']); dna[pos].meshB.material.color.setHex(colors['-']); dna[pos].a='-'; dna[pos].b='-'; addMutationEntry({type:'del', index:pos, offTarget:false, time:Date.now()}); }
+      for (let i=0;i<ins;i++){ const pos = Math.min(dna.length-1, idx + 1 + i); const base = ['A','T','C','G'][Math.floor(Math.random()*4)]; dna[pos].meshA.material.color.setHex(colors[base]); dna[pos].meshB.material.color.setHex(colors[complement(base)]); dna[pos].a=base; dna[pos].b=complement(base); addMutationEntry({type:'ins', index:pos, offTarget:false, time:Date.now()}); }
+      if (lastRepairEl) lastRepairEl.innerText = 'Last repair: NHEJ (indels)';
+      log('NHEJ simulated at last cut');
+      explain('NHEJ simulated', 'Non-homologous end joining (NHEJ) repaired the break.');
+    }
+
+    function simulateHDR(donorSeq){
+      if (cutSites.length === 0){ alert('No cut to repair. Create a cut first.'); explain('No cut', 'HDR requires a donor template to copy from; create a cut first.'); return; }
+      if (!donorSeq){ const d = prompt('Enter donor sequence (A/T/C/G):',''); if (!d) return; donorSeq = d.toUpperCase().replace(/[^ATCG]/g,'').slice(0,200); if (!donorSeq) { alert('Donor invalid. HDR aborted.'); return; } }
+      const idx = cutSites[cutSites.length-1];
+      const half = Math.floor(donorSeq.length/2);
+      const start = Math.max(0, idx - half);
+      for (let i=0;i<donorSeq.length && (start+i) < dna.length; i++){ const base = donorSeq[i]; dna[start+i].meshA.material.color.setHex(colors[base]); dna[start+i].meshB.material.color.setHex(colors[complement(base)]); dna[start+i].a=base; dna[start+i].b=complement(base); addMutationEntry({type:'HDR', index:start+i, offTarget:false, time:Date.now()}); }
+      if (lastRepairEl) lastRepairEl.innerText = 'Last repair: HDR (donor used)';
+      log('HDR applied with donor sequence');
+      explain('HDR applied', 'Homology-directed repair (HDR) used the donor sequence to replace bases at the cut site.');
+    }
+
+    const btnNHEJ = document.getElementById('btnNHEJ'); if (btnNHEJ) btnNHEJ.addEventListener('click', simulateNHEJ);
+    const btnHDR = document.getElementById('btnHDR'); if (btnHDR) btnHDR.addEventListener('click', function(){ simulateHDR(); });
+
+    // Guide highlight
+    function highlightGuide(seq){
+      if (!seq || seq.length < 1) return;
+      for (let i=0;i<dna.length;i++){ if (dna[i].guideRing){ dnaGroup.remove(dna[i].guideRing); dna[i].guideRing = null; } }
+      const aStr = dna.map(d=>d.a).join('');
+      const idx = aStr.indexOf(seq);
+      if (idx >= 0){
+        for (let i=idx;i<idx+seq.length && i<dna.length;i++){
+          const ringGeo = new THREE.RingGeometry(14,18,32);
+          const ringMat = new THREE.MeshBasicMaterial({ color:0x2ecc71, side:THREE.DoubleSide, transparent:true, opacity:0.9 });
+          const ring = new THREE.Mesh(ringGeo, ringMat);
+          ring.position.copy(dna[i].pos); ring.rotation.x = Math.PI/2; dnaGroup.add(ring); dna[i].guideRing = ring;
+        }
+        if (lastRepairEl) lastRepairEl.innerText = 'Guide found at index ' + idx;
+        log('Guide found at index ' + idx);
+        explain('Guide match', 'The guide RNA sequence matches this region of the DNA.');
+      } else { if (lastRepairEl) lastRepairEl.innerText = 'Guide not found'; log('Guide not found'); explain('Guide not found', 'The guide sequence does not match any contiguous region on the current DNA strand.'); }
+    }
+    if (guide2dEl) guide2dEl.addEventListener('click', function(){ highlightGuide(guideSeq); });
+
+    if (loadGuideBtn) loadGuideBtn.addEventListener('click', function(){
+      const v = (guideInput && guideInput.value) ? guideInput.value.toUpperCase().replace(/[^ATCG]/g,'') : '';
+      if (!v || v.length < 4){ alert('Enter a valid guide (min 4 bases)'); explain('Invalid guide', 'Guides must be at least 4 bases for this demo. Enter A/T/C/G characters.'); return; }
+      guideSeq = v;
+      if (guide2dEl) guide2dEl.innerText = guideSeq;
+      createGuideRibbon(guideSeq);
+      log('Guide loaded: ' + guideSeq);
+      explain('Guide loaded', 'A guide RNA was loaded.');
+    });
+
+    if (findPAMBtn) findPAMBtn.addEventListener('click', function(){
+      const counts = dna.reduce((acc,d)=>{ if (d.pam) acc[d.pam] = (acc[d.pam]||0)+1; return acc; }, {});
+      alert('PAM counts: ' + JSON.stringify(counts));
+      explain('PAM search', 'PAMs are short DNA motifs required for many CRISPR nucleases to bind.');
+    });
+
+    // Transcription (polymerase)
+    const polymerase = new THREE.Mesh(new THREE.SphereGeometry(6,12,12), new THREE.MeshStandardMaterial({ color:0x1f8ef1 }));
+    scene.add(polymerase);
+    let polPos = 0;
+    let polActive = false;
+    function startTranscription(){ polPos = 0; polActive = true; log('Transcription started'); explain('Transcription started', 'RNA polymerase is moving along the DNA.'); }
+    function stopTranscription(){ polActive = false; log('Transcription stopped'); explain('Transcription stopped', 'RNA polymerase stopped moving.'); }
+
+    let mrnaMesh = null;
+    function updateMRNA(upToIndex){
+      if (mrnaMesh){ scene.remove(mrnaMesh); mrnaMesh.geometry.dispose && mrnaMesh.geometry.dispose(); mrnaMesh.material.dispose && mrnaMesh.material.dispose(); mrnaMesh = null; }
+      const pts = [];
+      for (let i=0;i<=upToIndex && i<dna.length;i++){
+        const p = dna[i].pos.clone();
+        pts.push(new THREE.Vector3(p.x, p.y + 30, p.z));
+      }
+      if (pts.length < 2) return;
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      mrnaMesh = new THREE.Line(geo, new THREE.LineBasicMaterial({ color:0xff2d55, linewidth:2 }));
+      scene.add(mrnaMesh);
+    }
+
+    // DNA drag
+    let dnaDragMode = false;
+    let draggingDNA = false;
+    let dragOffset = new THREE.Vector3();
+    const dragPlane = new THREE.Plane();
+    const tmpVec = new THREE.Vector3();
+    const tmpPoint = new THREE.Vector3();
+
+    window.addEventListener('keydown', function(e){ if (e.key === 'd' || e.key === 'D') dnaDragMode = true; });
+    window.addEventListener('keyup', function(e){ if (e.key === 'd' || e.key === 'D') { dnaDragMode = false; draggingDNA = false; } });
+
+    renderer.domElement.addEventListener('pointerdown', function(e){
+      const allow = dnaDragMode || e.button === 1 || e.ctrlKey;
+      if (!allow) return;
+      if (e.target !== renderer.domElement) return;
+      updateMouse(e);
+      const worldPos = dnaGroup.position.clone();
+      const camDir = camera.getWorldDirection(tmpVec).clone().negate();
+      dragPlane.setFromNormalAndCoplanarPoint(camDir, worldPos);
+      const ray = raycaster.ray;
+      const intersectPoint = new THREE.Vector3();
+      if (ray.intersectPlane(dragPlane, intersectPoint)){
+        dragOffset.copy(intersectPoint).sub(dnaGroup.position);
+        draggingDNA = true;
+        if (controls && controls.enabled !== undefined) controls.enabled = false;
+        explain('Drag DNA', 'You started dragging the whole DNA molecule.');
+      }
+    });
+
+    renderer.domElement.addEventListener('pointermove', function(e){
+      if (!draggingDNA) return;
+      updateMouse(e);
+      const ray = raycaster.ray;
+      const intersectPoint = new THREE.Vector3();
+      if (ray.intersectPlane(dragPlane, intersectPoint)){
+        tmpPoint.copy(intersectPoint).sub(dragOffset);
+        dnaGroup.position.copy(tmpPoint);
+      }
+    });
+
+    window.addEventListener('pointerup', function(e){
+      if (draggingDNA){
+        draggingDNA = false;
+        if (controls && controls.enabled !== undefined) controls.enabled = true;
+        explain('DNA dropped', 'You released the DNA.');
+      }
+    });
+
+    // Render loop
+    let lastTime = performance.now();
+    let running = true;
+    const btnPause = document.getElementById('btnPause');
+    const speedEl = document.getElementById('speed');
+    let speed = 1;
+    if (btnPause) btnPause.addEventListener('click', function(){ running = !running; btnPause.innerText = running ? 'Pause' : 'Resume'; explain('Playback toggled', running ? 'Simulation resumed.' : 'Simulation paused.'); });
+    if (speedEl) speedEl.addEventListener('input', function(){ speed = parseFloat(speedEl.value || '1'); explain('Speed changed', 'Animation speed adjusted.'); });
+
+    function animate(now){
+      requestAnimationFrame(animate);
+      const dt = (now - lastTime) * 0.001 * speed;
+      lastTime = now;
+      if (running){
+        dnaGroup.rotation.y += 0.5 * dt;
+        if (polActive){
+          polPos += dt * 6;
+          const idx = Math.floor(polPos) % dna.length;
+          const p = dna[idx].pos.clone();
+          polymerase.position.copy(p).add(new THREE.Vector3(0, 10, 0));
+          updateMRNA(idx);
+          if (polPos > dna.length + 5){ polActive = false; log('Transcription finished'); explain('Transcription finished', 'RNA polymerase reached the end of the region and stopped.'); }
+        }
+      }
+      controls.update && controls.update();
+      renderer.render(scene, camera);
+    }
+    animate(performance.now());
+
+    // Resize
+    window.addEventListener('resize', function(){ camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+    // Debug helpers
+    window.__dnaDebug = {
+      regenerate: ()=>{ generateDNA(); },
+      setPairCount: (n)=>{ pairCount = Math.max(8, Math.floor(n)); generateDNA(); },
+      highlight: (s)=>{ highlightGuide(s); },
+      startTranscription: ()=>{ startTranscription(); },
+      stopTranscription: ()=>{ stopTranscription(); }
+    };
+
+    // UI wiring (no Cas selector; enzyme fixed to Cas9)
+    try {
+      const topbar = document.getElementById('topbar');
+      if (topbar){ topbar.addEventListener('dblclick', function(){ if (!polActive) startTranscription(); else stopTranscription(); }); }
+      const resetBtn = document.getElementById('resetBtn');
+      if (resetBtn) resetBtn.addEventListener('click', function(){ generateDNA(); explain('DNA reset', 'A new random DNA sequence was generated.'); });
+    } catch (e){ console.warn('UI wiring partial failure', e); }
+
+    // Final log
+    log('Classic DNA demo initialized. Enzyme: Cas9. Guide: ' + guideSeq);
+    explain('Welcome', 'Cas9-only demo loaded. Drag the enzyme onto the helix to bind it, then press Space or Simulate Cut to create a break.');
+
+    // Expose state
+    window.__dnaState = { scene, camera, renderer, dna, dnaGroup, attachedIndexGetter: ()=> attachedIndex, performCut, generateDNA };
+
+  })();
+  </script>
+</body>
+</html>
